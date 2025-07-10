@@ -1,0 +1,41 @@
+﻿<Window x:Class="FastDownloader.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:FastDownloader"
+        mc:Ignorable="d"
+        Title="FastDownloader" Height="450" Width="800">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Button Grid.Row="0" Content="Start Download" Click="StartDownload_Click" Width="150" Height="40" />
+
+        <DataGrid Grid.Row="1"
+                  x:Name="FilesGrid"
+                  AutoGenerateColumns="False"
+                  ItemsSource="{Binding Files}"
+                  IsReadOnly="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="File" Binding="{Binding FileName}" Width="*"/>
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="200"/>
+                <DataGridTemplateColumn Header="Progress" Width="200">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <ProgressBar Minimum="0"
+                         Maximum="100"
+                         Value="{Binding Progress}"
+                         Height="16"
+                         Margin="2"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</Window>
