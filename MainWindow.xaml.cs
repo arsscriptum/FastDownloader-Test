@@ -8,6 +8,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Text.Json;
+using FastDownloader;
+
 
 namespace FastDownloader
 {
@@ -16,6 +20,18 @@ namespace FastDownloader
         public static int MaxDegreeOfParallelism { get; set; } = 30;
 
         public static HttpClient HttpClient { get; } = new HttpClient();
+    }
+    public class AdvancedToolsJson
+    {
+        public string id { get; set; } = "";
+        public string name { get; set; } = "";
+        public long size { get; set; }
+        public string hash { get; set; } = "";
+        public string algorithm { get; set; } = "";
+        public bool encrypted { get; set; }
+        public string password { get; set; } = "";
+        public int numparts { get; set; }
+        public List<string> listparts { get; set; } = new();
     }
 
     public class File
@@ -33,50 +49,117 @@ namespace FastDownloader
             InitializeComponent();
             DataContext = this;
 
-            for (int i = 1; i <= 200; i++)
+            LoadFilesFromJson();
+        }
+        private async void LoadFilesFromJson()
+        {
+            try
             {
-                string url = $"https://arsscriptum.github.io/files/advanced-tools-v2/data/bmw_installer_package.rar{i:D4}.cpp";
-                Files.Add(new FileDownloadItem
+                string jsonUrl = "https://arsscriptum.github.io/files/fileshares-index/advanced-tools.json";
+                var files = await LoadJsonAsync(jsonUrl);
+                foreach (var f in files)
                 {
-                    Url = url,
-                    FileName = System.IO.Path.GetFileName(url),
-                    Status = "Pending",
-                    Progress = 0
-                });
+                    Files.Add(f);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to load JSON file: {ex.Message}");
             }
         }
-        public async Task<FileInfo> DownloadFile(
-            File file,
-            string rootDirectory,
-            CancellationToken ct = default,
-            Action<string>? updateStatus = null)
+        public async Task<List<FileDownloadItem>> LoadJsonAsync(string jsonUrl)
         {
-            updateStatus?.Invoke("Downloading");
-
-            string fileName = System.IO.Path.GetFileName(new Uri(file.DownloadUrl).LocalPath);
-            string downloadPath = System.IO.Path.Combine(rootDirectory, fileName);
-
-            using var response = await Config.HttpClient.GetAsync(file.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+            var response = await Config.HttpClient.GetAsync(jsonUrl);
             response.EnsureSuccessStatusCode();
 
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(downloadPath)!);
+            var jsonString = await response.Content.ReadAsStringAsync();
 
-            using var httpStream = await response.Content.ReadAsStreamAsync(ct);
-            using var fileStream = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None);
+            var model = JsonSerializer.Deserialize<AdvancedToolsJson>(jsonString);
 
-            var buffer = new byte[81920];
-            int read;
-            long totalRead = 0;
-            var totalBytes = response.Content.Headers.ContentLength ?? -1;
+            if (model == null || model.listparts == null)
+                throw new Exception("JSON is invalid or missing listparts.");
 
-            while ((read = await httpStream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct)) > 0)
+            // Convert JSON URLs into FileDownloadItem objects
+            var files = model.listparts.Select(url => new FileDownloadItem
             {
-                fileStream.Write(buffer, 0, read);
-                totalRead += read;
-                // optional: report progress
-            }
+                Url = url,
+                FileName = Path.GetFileName(url),
+                Status = "Pending",
+                Progress = 0
+            }).ToList();
 
-            return new FileInfo(downloadPath);
+            return files;
+        }
+
+        public async Task<FileInfo> DownloadFile(
+    File file,
+    string rootDirectory,
+    CancellationToken ct = default,
+    Action<string>? updateStatus = null,
+    Action<int>? reportProgress = null)
+    {
+        var sw = Stopwatch.StartNew();
+
+        updateStatus?.Invoke("Downloading");
+
+        string fileName = System.IO.Path.GetFileName(new Uri(file.DownloadUrl).LocalPath);
+        string downloadPath = System.IO.Path.Combine(rootDirectory, fileName);
+
+        using var response = await Config.HttpClient.GetAsync(file.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(downloadPath)!);
+
+        using var httpStream = await response.Content.ReadAsStreamAsync(ct);
+        using var fileStream = new FileStream(downloadPath, FileMode.Create, FileAccess.Write, FileShare.None);
+
+        var buffer = new byte[81920];
+        int read;
+        long totalRead = 0;
+        var totalBytes = response.Content.Headers.ContentLength ?? -1;
+
+        while ((read = await httpStream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct)) > 0)
+        {
+            fileStream.Write(buffer, 0, read);
+            totalRead += read;
+
+            if (totalBytes > 0)
+            {
+                int percent = (int)(totalRead * 100 / totalBytes);
+                reportProgress?.Invoke(percent);
+            }
+        }
+
+        sw.Stop();
+
+        // Format download time
+        var duration = sw.Elapsed;
+        string durationStr = $"{duration.TotalSeconds:F2}s";
+
+        // Update status to show transfer time
+        updateStatus?.Invoke($"Completed in {durationStr}");
+
+        return new FileInfo(downloadPath);
+    }
+
+        private async void TestCombine_Click(object sender, RoutedEventArgs e)
+        {
+            string downloadRoot = @"C:\Users\guillaumep\AppData\Local\Temp\cf2ec66a-5a97-4606-aab6-11a0ec404bf5";
+            string destination = @"C:\Users\guillaumep\AppData\Local\Temp\bmw_installer_package.rar.aes";
+
+            try
+            {
+                await Task.Run(() =>
+                {
+                    FileUtils.CombineSplitFiles(downloadRoot, destination, type: "raw");
+                });
+
+                MessageBox.Show($"Combined file created:\n{destination}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error combining files:\n{ex.Message}");
+            }
         }
 
 
@@ -108,8 +191,17 @@ namespace FastDownloader
                         }
                     });
                 };
-
-                var fileInfo = await DownloadFile(file, rootDirectory, ctx, updateStatus);
+                Action<int> reportProgress = (percent) =>
+                {
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        if (matchingItem != null)
+                        {
+                            matchingItem.Progress = percent;
+                        }
+                    });
+                };
+                var fileInfo = await DownloadFile(file, rootDirectory, ctx, updateStatus, reportProgress);
                 fileInfoBag.Add(fileInfo);
             });
 
@@ -117,11 +209,14 @@ namespace FastDownloader
             return fileInfoBag.ToList();
         }
 
+
         private async void StartDownload_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                string downloadRoot = @"C:\Temp\DownloadedFiles";
+                var swGlobal = Stopwatch.StartNew();
+
+                string downloadRoot = @"C:\Users\guillaumep\AppData\Local\Temp\cf2ec66a-5a97-4606-aab6-11a0ec404bf5";
                 Directory.CreateDirectory(downloadRoot);
 
                 var filesToDownload = Files.Select(f => new File
@@ -137,18 +232,23 @@ namespace FastDownloader
                     var matchingFile = Files.FirstOrDefault(f => f.FileName == fileInfo.Name);
                     if (matchingFile != null)
                     {
-                        matchingFile.Status = "Completed";
                         matchingFile.Progress = 100;
+                        // Status already updated in DownloadFile
                     }
                 }
 
-                MessageBox.Show("All downloads completed!");
+                swGlobal.Stop();
+                string globalDuration = $"{swGlobal.Elapsed.TotalSeconds:F2}s";
+
+                MessageBox.Show($"All downloads completed in {globalDuration}.");
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error downloading files: {ex.Message}");
             }
         }
+
+
     }
 
     public class FileDownloadItem : DependencyObject
